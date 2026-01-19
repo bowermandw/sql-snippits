@@ -1,19 +1,22 @@
 const fs = require('fs');
 const path = require('path');
 
+// Directory containing stored procedures to process
+const storedProcDir = __dirname;
+
 // Read the flowerbox template (preserve indentation, only trim trailing whitespace)
 const flowerboxTemplate = fs.readFileSync(path.join(__dirname, 'flowerbox.sql'), 'utf8')
     .replace(/\r\n/g, '\n')
     .trimEnd();
 
-// Get all .sql files in the directory (excluding the template and this script)
-const sqlFiles = fs.readdirSync(__dirname)
+// Get all .sql files in the directory (excluding the template)
+const sqlFiles = fs.readdirSync(storedProcDir)
     .filter(f => f.endsWith('.sql') && f !== 'flowerbox.sql');
 
 console.log(`Found ${sqlFiles.length} SQL files to process.\n`);
 
 for (const file of sqlFiles) {
-    const filePath = path.join(__dirname, file);
+    const filePath = path.join(storedProcDir, file);
     let content = fs.readFileSync(filePath, 'utf8');
 
     // Normalize line endings to \n for processing
