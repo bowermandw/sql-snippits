@@ -19,14 +19,21 @@ for (const file of sqlFiles) {
     // Normalize line endings to \n for processing
     content = content.replace(/\r\n/g, '\n');
 
+    // Check if this is a stored procedure file (must have CREATE PROCEDURE or CREATE OR ALTER PROCEDURE)
+    const isStoredProc = /create\s+(or\s+alter\s+)?procedure\s+/i.test(content);
+    if (!isStoredProc) {
+        console.log(`[${file}] Skipping: Not a stored procedure file.`);
+        continue;
+    }
+
     let modified = false;
     const changes = [];
 
     // Extract procedure name from the CREATE/ALTER statement
     // Handles: dbo.name, [dbo].[name], or just name
-    const procNameMatch = content.match(/create\s+or\s+alter\s+procedure\s+((\[?[\w]+\]?\.)?\[?[\w]+\]?)/i);
-    // Get full procedure name (schema.name), removing brackets
-    const fullProcName = procNameMatch ? procNameMatch[1].replace(/\[|\]/g, '') : 'Unknown';
+    const procNameMatch = content.match(/create\s+(or\s+alter\s+)?procedure\s+((\[?[\w]+\]?\.)?\[?[\w]+\]?)/i);
+    // Get full procedure name (schema.name), removing brackets - group 2 contains the full name
+    const fullProcName = procNameMatch ? procNameMatch[2].replace(/\[|\]/g, '') : 'Unknown';
 
     // Get file creation date
     const fileStats = fs.statSync(filePath);
