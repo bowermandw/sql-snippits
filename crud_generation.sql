@@ -110,6 +110,8 @@ FROM
                                   ELSE [DATA_TYPE]
                              END,
                              CASE WHEN [DATA_TYPE] = 'BIT' THEN ''
+                             WHEN [DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' ) THEN
+                                CONCAT('(', [NUMERIC_PRECISION] + 2, ') = NULL')
                              ELSE CONCAT('(',
                                 ISNULL(
                                     CONVERT(
@@ -276,9 +278,10 @@ FROM
                          ELSE [c].[DATA_TYPE]
                     END,
                     '(',
-                    COALESCE(
-                        [c].[CHARACTER_MAXIMUM_LENGTH], [c].[NUMERIC_PRECISION]
-                    ),
+                    CASE WHEN [c].[DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' )
+                         THEN [c].[NUMERIC_PRECISION] + 2
+                         ELSE COALESCE([c].[CHARACTER_MAXIMUM_LENGTH], [c].[NUMERIC_PRECISION])
+                    END,
                     --CASE WHEN [c].[CHARACTER_MAXIMUM_LENGTH] IS NOT NULL THEN CONCAT(' (', [c].[CHARACTER_MAXIMUM_LENGTH],')' ) END,
                     ') = NULL'
                 ),
@@ -444,6 +447,8 @@ FROM
                                   ELSE [c1].[DATA_TYPE]
                              END,
                              CASE WHEN [c1].[DATA_TYPE] = 'BIT' THEN ''
+                             WHEN [c1].[DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' ) THEN
+                                CONCAT('(', [c1].[NUMERIC_PRECISION] + 2, ') = NULL')
                              ELSE CONCAT('(',
                                 ISNULL(
                                     CONVERT(
@@ -608,9 +613,10 @@ FROM
                          ELSE [c].[DATA_TYPE]
                     END,
                     '(',
-                    COALESCE(
-                        [c].[CHARACTER_MAXIMUM_LENGTH], [c].[NUMERIC_PRECISION]
-                    ),
+                    CASE WHEN [c].[DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' )
+                         THEN [c].[NUMERIC_PRECISION] + 2
+                         ELSE COALESCE([c].[CHARACTER_MAXIMUM_LENGTH], [c].[NUMERIC_PRECISION])
+                    END,
                     --CASE WHEN [c].[CHARACTER_MAXIMUM_LENGTH] IS NOT NULL THEN CONCAT(' (', [c].[CHARACTER_MAXIMUM_LENGTH],')' ) END,
                     ') = NULL'
                 ),
@@ -751,6 +757,9 @@ FROM
                          ELSE [c].[DATA_TYPE]
                     END,
                     '(',
+                    CASE WHEN [c].[DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' ) THEN
+                        CONVERT(VARCHAR(50), [NUMERIC_PRECISION] + 2)
+                    ELSE
                     ISNULL(
                         CONVERT(
                             VARCHAR(50),
@@ -761,7 +770,7 @@ FROM
                                    ), -1)
                         ),
                         'MAX'
-                    ),
+                    ) END,
                     --CASE WHEN [c].[CHARACTER_MAXIMUM_LENGTH] IS NOT NULL THEN CONCAT(' (', [c].[CHARACTER_MAXIMUM_LENGTH],')' ) END,
                     ') = NULL'
                 ),
@@ -932,6 +941,9 @@ FROM
                          ELSE [c].[DATA_TYPE]
                     END,
                     '(',
+                    CASE WHEN [c].[DATA_TYPE] IN ( 'DECIMAL', 'NUMERIC' ) THEN
+                        CONVERT(VARCHAR(50), [NUMERIC_PRECISION] + 2)
+                    ELSE
                     ISNULL(
                         CONVERT(
                             VARCHAR(50),
@@ -942,7 +954,7 @@ FROM
                                    ), -1)
                         ),
                         'MAX'
-                    ),
+                    ) END,
                     --CASE WHEN [c].[CHARACTER_MAXIMUM_LENGTH] IS NOT NULL THEN CONCAT(' (', [c].[CHARACTER_MAXIMUM_LENGTH],')' ) END,
                     ') = NULL'
                 ),
