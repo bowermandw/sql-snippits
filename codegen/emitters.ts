@@ -432,6 +432,28 @@ function sampleValue(model: FeatureModel, param: ProcParam): string {
   return "'test'";
 }
 
+/** Can this field be read back and compared with `toBe` (a non-JSON primitive)? */
+function isComparableScalar(model: FeatureModel, param: ProcParam): boolean {
+  if (model.jsonColumns.includes(param.name)) return false;
+  const field = fieldsByName(model).get(param.name);
+  if (!field) return false;
+  if (field.enumValues) return field.enumValues.length >= 2; // need a second value to change to
+  const ts = field.ts.replace(' | null', '');
+  return ts === 'string' || ts === 'number' || ts === 'boolean';
+}
+
+/** A literal that differs from sampleValue(), so an update is observably applied. */
+function mutatedLiteral(model: FeatureModel, param: ProcParam): string {
+  const field = fieldsByName(model).get(param.name);
+  if (field?.enumValues && field.enumValues.length >= 2) {
+    return `'${(field.enumValues[1] as string).replace(/'/g, "\\'")}'`;
+  }
+  const ts = (field?.ts ?? 'string').replace(' | null', '');
+  if (ts === 'number') return '2';
+  if (ts === 'boolean') return 'false';
+  return "'updated'";
+}
+
 export function emitTest(model: FeatureModel): string {
   const { table, entity, procs, selectKeyParam } = model;
   const pkCol = model.pkColumns[0] ?? 'id';
@@ -441,9 +463,10 @@ export function emitTest(model: FeatureModel): string {
   out.push('// =============================================================================');
   out.push(`// ${table} data-layer test — validates the T-SQL ↔ TypeScript/zod seam.`);
   out.push('//');
-  out.push(`// ${GENERATED_BY} Seeds via the repo, reads back via the select proc, and parses`);
-  out.push(`// the RAW select row with ${entity}Schema.strict() so a renamed or mistyped column`);
-  out.push('// fails loudly here. Runs inside a rolled-back transaction (see support/db.ts).');
+  out.push(`// ${GENERATED_BY} Walks the full CRUD lifecycle — insert, confirm it exists (raw`);
+  out.push(`// select row parsed with ${entity}Schema.strict()), update a field and confirm the`);
+  out.push('// new value round-trips, then delete and confirm it is gone. Runs inside a');
+  out.push('// rolled-back transaction (see support/db.ts).');
   out.push('// =============================================================================');
   out.push('');
   out.push("import { describe, expect } from 'vitest';");
@@ -454,26 +477,29 @@ export function emitTest(model: FeatureModel): string {
   out.push("import { test } from './support/db';");
   out.push('');
   out.push(`describe('${table} data layer', () => {`);
-  out.push(
-    "  test('insert returns a row matching the schema; reads round-trip', async ({ db }) => {",
-  );
+  out.push("  test('insert → read → update → delete round-trips', async ({ db }) => {");
   out.push(`    const repo = new ${entity}Repo(db);`);
   out.push('');
 
   if (insertProc) {
-    const params = insertProc.params.filter((p) => p.name !== 'user_id');
+    const hasSelect = selectProcAndKey(model);
+
+    // 1. Insert.
+    const insertParams = insertProc.params.filter((p) => p.name !== 'user_id');
+    out.push('    // 1. Insert a row.');
     out.push('    const created = await repo.insert(');
     out.push('      {');
-    for (const p of params) out.push(`        ${p.name}: ${sampleValue(model, p)},`);
+    for (const p of insertParams) out.push(`        ${p.name}: ${sampleValue(model, p)},`);
     out.push('      },');
     out.push("      'tester',");
     out.push('    );');
     out.push(`    const id = created.${pkCol};`);
-    out.push(`    expect(id).toBeDefined();`);
+    out.push('    expect(id).toBeDefined();');
     out.push('');
 
-    if (selectProcAndKey(model)) {
-      out.push('    // Raw row straight from the select proc, validated strictly.');
+    // 2. Confirm it exists.
+    if (hasSelect) {
+      out.push('    // 2. It exists: the raw select row matches the schema, and getById finds it.');
       out.push(
         `    const raw = await db.query(\`EXEC ${procs.select?.name} @user_id = @p0, @${selectKeyParam} = @p1\`, [`,
       );
@@ -482,37 +508,60 @@ export function emitTest(model: FeatureModel): string {
       out.push('    ]);');
       out.push(`    expect(() => ${entity}Schema.strict().parse(raw.rows[0])).not.toThrow();`);
       out.push('');
-      out.push(`    const got = await repo.getById(id, 'tester');`);
-      out.push(`    expect(got?.${pkCol}).toBe(id);`);
-      out.push('');
-      out.push(`    const all = await repo.list('tester');`);
-      out.push(`    expect(all.some((r) => r.${pkCol} === id)).toBe(true);`);
+      out.push(`    const found = await repo.getById(id, 'tester');`);
+      out.push('    expect(found).not.toBeNull();');
+      out.push(`    expect(found?.${pkCol}).toBe(id);`);
+      out.push(
+        `    expect((await repo.list('tester')).some((r) => r.${pkCol} === id)).toBe(true);`,
+      );
       out.push('');
     }
 
     if (procs.count) {
+      out.push('    // The count proc sees the new row.');
       out.push(`    expect(await repo.count('tester')).toBeGreaterThan(0);`);
       out.push('');
     }
 
+    // 3. Update a field and confirm the new value persisted.
     if (procs.update && selectKeyParam) {
       const upParams = procs.update.params.filter(
         (p) => p.name !== 'user_id' && p.name !== selectKeyParam,
       );
+      const target = upParams.find((p) => isComparableScalar(model, p));
+      out.push('    // 3. Update a field and confirm the change round-trips.');
       out.push('    const updated = await repo.update(');
       out.push('      id,');
       out.push('      {');
-      for (const p of upParams) out.push(`        ${p.name}: ${sampleValue(model, p)},`);
+      for (const p of upParams) {
+        const literal =
+          target && p.name === target.name ? mutatedLiteral(model, p) : sampleValue(model, p);
+        out.push(`        ${p.name}: ${literal},`);
+      }
       out.push('      },');
       out.push("      'tester',");
       out.push('    );');
-      out.push(`    expect(updated?.${pkCol}).toBe(id);`);
+      out.push('    expect(updated).not.toBeNull();');
+      if (target) {
+        const literal = mutatedLiteral(model, target);
+        out.push(`    expect(updated?.${target.name}).toBe(${literal});`);
+        if (hasSelect) {
+          out.push(
+            `    expect((await repo.getById(id, 'tester'))?.${target.name}).toBe(${literal});`,
+          );
+        }
+      } else {
+        // No comparable scalar column to mutate — assert identity only.
+        out.push(`    expect(updated?.${pkCol}).toBe(id);`);
+      }
       out.push('');
     }
 
+    // 4. Delete and confirm it is gone.
     if (procs.delete && selectKeyParam) {
+      out.push('    // 4. Delete, then confirm it is gone.');
       out.push(`    await repo.delete(id, 'tester');`);
-      out.push(`    expect(await repo.getById(id, 'tester')).toBeNull();`);
+      if (hasSelect) out.push(`    expect(await repo.getById(id, 'tester')).toBeNull();`);
       out.push('');
     }
   } else {

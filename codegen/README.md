@@ -27,6 +27,16 @@ It also makes **idempotent** edits to four shared files: `types/src/index.ts`,
 `Database` map), and `db/src/connection.ts` (`JSON_COLUMNS`, for any ISJSON
 column). Re-running never duplicates these.
 
+### Overwrite-guarding
+
+Every generated file is skipped (not overwritten) if it already exists, unless
+you pass `--force`. This matters most for the **schema snapshots**: the proc
+snapshots come verbatim from the catalog, and the **table snapshot is
+reconstructed DDL**, so a curated `schema/tables/<table>.sql` is higher-fidelity
+than what the generator emits. The table snapshot is therefore protected exactly
+like the proc snapshots — `gen:feature <table>` will leave an existing table file
+in place (the run reports it under `skipped`), and only `--force` regenerates it.
+
 ## How it decides types
 
 - **Row shape** (zod schema, row interface, repo `Row` type) comes from

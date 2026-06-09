@@ -223,6 +223,11 @@ async function main(): Promise<void> {
   const written: string[] = [];
   const skipped: string[] = [];
 
+  // Every generated file is overwrite-guarded: if it already exists, skip it
+  // unless --force. This protects hand-maintained snapshots — both the proc
+  // snapshots (verbatim from the catalog) and the table snapshot (reconstructed
+  // DDL, so a curated table file is higher-fidelity than what we emit) — from
+  // being clobbered by the generator.
   const write = async (absPath: string, content: string): Promise<void> => {
     const rel = path.relative(repoRoot, absPath);
     if (!force && (await exists(absPath))) {
@@ -245,15 +250,19 @@ async function main(): Promise<void> {
   const repoFile = path.join(repoRoot, 'packages', 'db', 'src', 'repositories', `${table}.repo.ts`);
   const testFile = path.join(repoRoot, 'packages', 'db', 'test', `${table}.test.ts`);
 
+  // Generated source + migration.
   await write(typesFile, emitTypes(model));
   await write(migrationFile, emitMigration(model));
   await write(migrationDownFile, emitMigrationDown(model));
+  await write(repoFile, emitRepository(model));
+  await write(testFile, emitTest(model));
+
+  // Hand-maintainable schema snapshots — the table DDL is treated exactly like
+  // the proc snapshots: skipped (not overwritten) unless --force.
   await write(tableSnapshot, emitTableSnapshot(model));
   for (const snap of emitProcSnapshots(model)) {
     await write(path.join(procsDir, snap.fileName), snap.content);
   }
-  await write(repoFile, emitRepository(model));
-  await write(testFile, emitTest(model));
 
   // Idempotent shared-file wiring.
   const registrations = await registerFeature(model);
