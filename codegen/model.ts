@@ -109,8 +109,14 @@ export interface FeatureModel {
   entity: string;
   /** PK column names in key order. */
   pkColumns: string[];
-  /** The single key parameter `_select` keys on (null for composite/none). */
-  selectKeyParam: string | null;
+  /**
+   * The select-proc parameters that form the key, in key order — one per PK
+   * column. `getById`/`update`/`delete` key on these; `list` passes them all
+   * null. Length 1 = simple key (methods take `id`), >1 = composite key
+   * (methods take a `<Entity>Key` object), 0 = no usable key (those methods are
+   * skipped).
+   */
+  keyParams: string[];
   /** Authoritative row fields (from the select result set or table fallback). */
   fields: FieldModel[];
   /** Names of ISJSON columns — fed to the connection-layer JSON_COLUMNS set. */

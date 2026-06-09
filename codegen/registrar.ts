@@ -67,6 +67,7 @@ async function registerDbIndex(model: FeatureModel): Promise<RegisterResult> {
   const repoTypes = [`${entity}Row`];
   if (procs.insert) repoTypes.push(`${entity}InsertInput`);
   if (procs.update) repoTypes.push(`${entity}UpdateInput`);
+  if (model.keyParams.length > 1) repoTypes.push(`${entity}Key`); // composite-key object
   repoTypes.sort();
   const repoTypeExport = `export type { ${repoTypes.join(', ')} } from './repositories/${table}.repo.js';`;
 

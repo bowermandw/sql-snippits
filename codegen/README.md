@@ -53,8 +53,21 @@ in place (the run reports it under `skipped`), and only `--force` regenerates it
 
 Targets `crd.<table>_{insert,update,select,delete}`. A single `_select` does
 double duty: `getById` passes the key, `list` passes the key as `null`. The repo
-emits a method only for the procs that exist; a missing proc or a composite PK is
-reported and its method skipped (wire those by hand).
+emits a method only for the procs that exist; a missing proc is reported and its
+method skipped.
+
+**Composite keys are supported.** When the PK spans multiple columns (and each
+appears as a `_select` parameter), the generator emits a `<Entity>Key` object and
+`getById`/`update`/`delete` take it instead of a bare `id`:
+
+```ts
+export interface OrderLineKey { order_id: number; line_no: number; }
+await repo.getById({ order_id: 1, line_no: 2 });
+```
+
+For a single-column PK the methods keep the simple `id` parameter. If the PK
+columns don't map to `_select` parameters (so no key can be formed), those
+methods are skipped and a warning is printed.
 
 ## `--with-count`
 

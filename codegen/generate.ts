@@ -137,10 +137,21 @@ async function buildFeatureModel(
     fields = columns.map((c) => makeField(c.name, c.sqlType, c.isNullable));
   }
 
-  // The single key parameter the select proc filters on (null for composite PK).
-  let selectKeyParam: string | null = null;
-  if (selectProc && pkColumns.length === 1) {
-    selectKeyParam = selectProc.params.find((p) => p.name !== 'user_id')?.name ?? null;
+  // The select-proc parameters that form the key — one per PK column. Composite
+  // keys are supported: if every PK column appears as a select param, the key is
+  // all of them (in PK order). For a single PK whose param name differs from the
+  // column, fall back to the first non-user_id param.
+  let keyParams: string[] = [];
+  if (selectProc) {
+    const paramNames = new Set(
+      selectProc.params.filter((p) => p.name !== 'user_id').map((p) => p.name),
+    );
+    if (pkColumns.length >= 1 && pkColumns.every((c) => paramNames.has(c))) {
+      keyParams = [...pkColumns];
+    } else if (pkColumns.length <= 1) {
+      const first = selectProc.params.find((p) => p.name !== 'user_id');
+      if (first) keyParams = [first.name];
+    }
   }
 
   // Warn about anything that weakens the generated repo/test.
@@ -148,10 +159,18 @@ async function buildFeatureModel(
     if (!procs[action])
       warnings.push(`No crd.${table}_${action} proc — its repo method is skipped.`);
   }
-  if (pkColumns.length !== 1) {
+  if (keyParams.length === 0) {
     warnings.push(
-      `Table has ${pkColumns.length} primary-key column(s); getById/update/delete need a single ` +
-        `key. Those methods were skipped — wire them by hand.`,
+      selectProc
+        ? `Could not map a key for ${table}: its primary key (${pkColumns.join(', ') || 'none'}) ` +
+            `doesn't match crd.${table}_select's parameters. getById/update/delete were skipped — ` +
+            `wire them by hand.`
+        : `No crd.${table}_select proc — getById/update/delete/list were skipped.`,
+    );
+  } else if (keyParams.length > 1) {
+    warnings.push(
+      `Composite key (${keyParams.join(', ')}): getById/update/delete take a ` +
+        `${toPascalCase(table)}Key object.`,
     );
   }
 
@@ -160,7 +179,7 @@ async function buildFeatureModel(
     tableSchema: 'dbo',
     entity: toPascalCase(table),
     pkColumns,
-    selectKeyParam,
+    keyParams,
     fields,
     jsonColumns: [...jsonColumns],
     procs,

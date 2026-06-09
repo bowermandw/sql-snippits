@@ -19,6 +19,40 @@ function tsTypeOf(model: FeatureModel, columnName: string): string {
   return fieldsByName(model).get(columnName)?.ts ?? 'string';
 }
 
+// --- key helpers (single or composite) --------------------------------------
+
+/** The entity has at least one usable key column. */
+function hasKey(model: FeatureModel): boolean {
+  return model.keyParams.length > 0;
+}
+
+/** The key spans more than one column → methods take a `<Entity>Key` object. */
+function isCompositeKey(model: FeatureModel): boolean {
+  return model.keyParams.length > 1;
+}
+
+/** Key method parameter: `id: number` (simple) or `key: WidgetKey` (composite). */
+function keyParamSignature(model: FeatureModel): string {
+  if (isCompositeKey(model)) return `key: ${model.entity}Key`;
+  return `id: ${tsTypeOf(model, model.keyParams[0] as string)}`;
+}
+
+/** The argument name callers pass through (`id` or `key`). */
+function keyArgName(model: FeatureModel): string {
+  return isCompositeKey(model) ? 'key' : 'id';
+}
+
+/** callProc entries binding each key param to its value (id, or key.<col>). */
+function keyCallEntries(model: FeatureModel): string[] {
+  if (isCompositeKey(model)) return model.keyParams.map((p) => `      ${p}: key.${p},`);
+  return [`      ${model.keyParams[0] as string}: id,`];
+}
+
+/** callProc entries that null every key param (list = all rows). */
+function keyNullEntries(model: FeatureModel): string[] {
+  return model.keyParams.map((p) => `      ${p}: null,`);
+}
+
 // -----------------------------------------------------------------------------
 // 1. Shared types — packages/types/src/<table>.ts
 // -----------------------------------------------------------------------------
@@ -237,9 +271,8 @@ function emitInputInterface(model: FeatureModel, name: string, params: ProcParam
 }
 
 export function emitRepository(model: FeatureModel): string {
-  const { entity, procs, selectKeyParam } = model;
-  const pkCol = model.pkColumns[0] ?? null;
-  const pkTs = pkCol ? tsTypeOf(model, pkCol) : 'number';
+  const { entity, procs } = model;
+  const keyed = hasKey(model);
   const out: string[] = [];
 
   out.push('// =============================================================================');
@@ -265,6 +298,14 @@ export function emitRepository(model: FeatureModel): string {
   out.push('}');
   out.push('');
 
+  // Composite-key object — getById/update/delete take this instead of a bare id.
+  if (isCompositeKey(model)) {
+    out.push(`export interface ${entity}Key {`);
+    for (const p of model.keyParams) out.push(`  ${p}: ${tsTypeOf(model, p)};`);
+    out.push('}');
+    out.push('');
+  }
+
   // Input interfaces.
   const insertProc = procs.insert;
   const updateProc = procs.update;
@@ -275,7 +316,7 @@ export function emitRepository(model: FeatureModel): string {
   }
   if (updateProc) {
     const params = updateProc.params.filter(
-      (p) => p.name !== 'user_id' && p.name !== selectKeyParam,
+      (p) => p.name !== 'user_id' && !model.keyParams.includes(p.name),
     );
     out.push(emitInputInterface(model, `${entity}UpdateInput`, params));
     out.push('');
@@ -302,16 +343,16 @@ export function emitRepository(model: FeatureModel): string {
   }
 
   // update
-  if (updateProc && selectKeyParam) {
+  if (updateProc && keyed) {
     const params = updateProc.params.filter(
-      (p) => p.name !== 'user_id' && p.name !== selectKeyParam,
+      (p) => p.name !== 'user_id' && !model.keyParams.includes(p.name),
     );
     out.push(
-      `  async update(id: ${pkTs}, input: ${entity}UpdateInput, actor: string = SYSTEM_ACTOR): Promise<${entity}Row | null> {`,
+      `  async update(${keyParamSignature(model)}, input: ${entity}UpdateInput, actor: string = SYSTEM_ACTOR): Promise<${entity}Row | null> {`,
     );
     out.push(`    const rows = await callProc<${entity}Row>(this.db, '${updateProc.name}', {`);
     out.push('      user_id: actor,');
-    out.push(`      ${selectKeyParam}: id,`);
+    for (const e of keyCallEntries(model)) out.push(e);
     for (const p of params) out.push(`      ${p.name}: ${paramValueExpr(model, p)},`);
     out.push('    });');
     out.push('    return rows[0] ?? null;');
@@ -321,24 +362,27 @@ export function emitRepository(model: FeatureModel): string {
 
   // delete
   const deleteProc = procs.delete;
-  if (deleteProc && selectKeyParam) {
-    out.push(`  async delete(id: ${pkTs}, actor: string = SYSTEM_ACTOR): Promise<void> {`);
+  if (deleteProc && keyed) {
     out.push(
-      `    await callProc(this.db, '${deleteProc.name}', { user_id: actor, ${selectKeyParam}: id });`,
+      `  async delete(${keyParamSignature(model)}, actor: string = SYSTEM_ACTOR): Promise<void> {`,
     );
+    out.push(`    await callProc(this.db, '${deleteProc.name}', {`);
+    out.push('      user_id: actor,');
+    for (const e of keyCallEntries(model)) out.push(e);
+    out.push('    });');
     out.push('  }');
     out.push('');
   }
 
   // getById + list (shared select)
   const selectProc = procs.select;
-  if (selectProc && selectKeyParam) {
+  if (selectProc && keyed) {
     out.push(
-      `  async getById(id: ${pkTs}, actor: string = SYSTEM_ACTOR): Promise<${entity}Row | null> {`,
+      `  async getById(${keyParamSignature(model)}, actor: string = SYSTEM_ACTOR): Promise<${entity}Row | null> {`,
     );
     out.push(`    const rows = await callProc<${entity}Row>(this.db, '${selectProc.name}', {`);
     out.push('      user_id: actor,');
-    out.push(`      ${selectKeyParam}: id,`);
+    for (const e of keyCallEntries(model)) out.push(e);
     out.push('    });');
     out.push('    return rows[0] ?? null;');
     out.push('  }');
@@ -346,7 +390,7 @@ export function emitRepository(model: FeatureModel): string {
     out.push(`  async list(actor: string = SYSTEM_ACTOR): Promise<${entity}Row[]> {`);
     out.push(`    return callProc<${entity}Row>(this.db, '${selectProc.name}', {`);
     out.push('      user_id: actor,');
-    out.push(`      ${selectKeyParam}: null,`);
+    for (const e of keyNullEntries(model)) out.push(e);
     out.push('    });');
     out.push('  }');
     out.push('');
@@ -363,7 +407,7 @@ export function emitRepository(model: FeatureModel): string {
     out.push('    return rows[0]?.total ?? 0;');
     out.push('  }');
     out.push('');
-    if (selectProc && selectKeyParam) {
+    if (selectProc && keyed) {
       out.push(`  /** One listing plus its total, for a paged UI. */`);
       out.push(
         `  async listPage(actor: string = SYSTEM_ACTOR): Promise<{ rows: ${entity}Row[]; total: number }> {`,
@@ -455,9 +499,14 @@ function mutatedLiteral(model: FeatureModel, param: ProcParam): string {
 }
 
 export function emitTest(model: FeatureModel): string {
-  const { table, entity, procs, selectKeyParam } = model;
-  const pkCol = model.pkColumns[0] ?? 'id';
+  const { table, entity, procs } = model;
   const insertProc = procs.insert;
+  const keyed = hasKey(model);
+  const composite = isCompositeKey(model);
+  const keyCols = model.keyParams;
+  const keyArg = keyArgName(model);
+  /** Captured-key value for a single key column (`id` or `key.<col>`). */
+  const valOf = (p: string): string => (composite ? `key.${p}` : 'id');
   const out: string[] = [];
 
   out.push('// =============================================================================');
@@ -482,7 +531,7 @@ export function emitTest(model: FeatureModel): string {
   out.push('');
 
   if (insertProc) {
-    const hasSelect = selectProcAndKey(model);
+    const hasSelect = Boolean(procs.select) && keyed;
 
     // 1. Insert.
     const insertParams = insertProc.params.filter((p) => p.name !== 'user_id');
@@ -493,27 +542,40 @@ export function emitTest(model: FeatureModel): string {
     out.push('      },');
     out.push("      'tester',");
     out.push('    );');
-    out.push(`    const id = created.${pkCol};`);
-    out.push('    expect(id).toBeDefined();');
+
+    if (keyed) {
+      // Capture the key from the returned row: `id` for a simple key, a key
+      // object for a composite key.
+      if (composite) {
+        const fields = keyCols.map((p) => `${p}: created.${p}`).join(', ');
+        out.push(`    const key = { ${fields} };`);
+        out.push(`    expect(created.${keyCols[0] as string}).toBeDefined();`);
+      } else {
+        out.push(`    const id = created.${keyCols[0] as string};`);
+        out.push('    expect(id).toBeDefined();');
+      }
+    } else {
+      out.push('    expect(created).toBeDefined();');
+    }
     out.push('');
 
     // 2. Confirm it exists.
     if (hasSelect) {
+      const execParams = keyCols.map((p, i) => `@${p} = @p${i + 1}`).join(', ');
       out.push('    // 2. It exists: the raw select row matches the schema, and getById finds it.');
       out.push(
-        `    const raw = await db.query(\`EXEC ${procs.select?.name} @user_id = @p0, @${selectKeyParam} = @p1\`, [`,
+        `    const raw = await db.query(\`EXEC ${procs.select?.name} @user_id = @p0, ${execParams}\`, [`,
       );
       out.push("      'tester',");
-      out.push('      String(id),');
+      for (const p of keyCols) out.push(`      String(${valOf(p)}),`);
       out.push('    ]);');
       out.push(`    expect(() => ${entity}Schema.strict().parse(raw.rows[0])).not.toThrow();`);
       out.push('');
-      out.push(`    const found = await repo.getById(id, 'tester');`);
+      out.push(`    const found = await repo.getById(${keyArg}, 'tester');`);
       out.push('    expect(found).not.toBeNull();');
-      out.push(`    expect(found?.${pkCol}).toBe(id);`);
-      out.push(
-        `    expect((await repo.list('tester')).some((r) => r.${pkCol} === id)).toBe(true);`,
-      );
+      for (const p of keyCols) out.push(`    expect(found?.${p}).toBe(${valOf(p)});`);
+      const listMatch = keyCols.map((p) => `r.${p} === ${valOf(p)}`).join(' && ');
+      out.push(`    expect((await repo.list('tester')).some((r) => ${listMatch})).toBe(true);`);
       out.push('');
     }
 
@@ -524,14 +586,14 @@ export function emitTest(model: FeatureModel): string {
     }
 
     // 3. Update a field and confirm the new value persisted.
-    if (procs.update && selectKeyParam) {
+    if (procs.update && keyed) {
       const upParams = procs.update.params.filter(
-        (p) => p.name !== 'user_id' && p.name !== selectKeyParam,
+        (p) => p.name !== 'user_id' && !model.keyParams.includes(p.name),
       );
       const target = upParams.find((p) => isComparableScalar(model, p));
       out.push('    // 3. Update a field and confirm the change round-trips.');
       out.push('    const updated = await repo.update(');
-      out.push('      id,');
+      out.push(`      ${keyArg},`);
       out.push('      {');
       for (const p of upParams) {
         const literal =
@@ -547,21 +609,23 @@ export function emitTest(model: FeatureModel): string {
         out.push(`    expect(updated?.${target.name}).toBe(${literal});`);
         if (hasSelect) {
           out.push(
-            `    expect((await repo.getById(id, 'tester'))?.${target.name}).toBe(${literal});`,
+            `    expect((await repo.getById(${keyArg}, 'tester'))?.${target.name}).toBe(${literal});`,
           );
         }
       } else {
         // No comparable scalar column to mutate — assert identity only.
-        out.push(`    expect(updated?.${pkCol}).toBe(id);`);
+        out.push(
+          `    expect(updated?.${keyCols[0] as string}).toBe(${valOf(keyCols[0] as string)});`,
+        );
       }
       out.push('');
     }
 
     // 4. Delete and confirm it is gone.
-    if (procs.delete && selectKeyParam) {
+    if (procs.delete && keyed) {
       out.push('    // 4. Delete, then confirm it is gone.');
-      out.push(`    await repo.delete(id, 'tester');`);
-      if (hasSelect) out.push(`    expect(await repo.getById(id, 'tester')).toBeNull();`);
+      out.push(`    await repo.delete(${keyArg}, 'tester');`);
+      if (hasSelect) out.push(`    expect(await repo.getById(${keyArg}, 'tester')).toBeNull();`);
       out.push('');
     }
   } else {
@@ -574,8 +638,4 @@ export function emitTest(model: FeatureModel): string {
   out.push('});');
   out.push('');
   return out.join('\n');
-}
-
-function selectProcAndKey(model: FeatureModel): boolean {
-  return Boolean(model.procs.select && model.selectKeyParam);
 }
