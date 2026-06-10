@@ -540,7 +540,7 @@ export function emitTest(model: FeatureModel): string {
   out.push("import { test } from './support/db';");
   out.push('');
   out.push(`describe('${table} data layer', () => {`);
-  out.push("  test('insert → read → update → delete round-trips', async ({ db }) => {");
+  out.push(`  test('${table} insert → read → update → delete round-trips', async ({ db }) => {`);
   out.push(`    const repo = new ${entity}Repo(db);`);
   out.push('');
 
