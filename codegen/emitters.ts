@@ -148,6 +148,20 @@ function renderIndexDdls(model: FeatureModel): string[] {
   });
 }
 
+/**
+ * Force a proc body to `CREATE OR ALTER PROCEDURE` so applying it is idempotent
+ * (safe to re-run against a DB that already has the proc). `OBJECT_DEFINITION`
+ * returns whatever text created the proc, which is usually already
+ * `CREATE OR ALTER` in this project — but normalize `CREATE PROCEDURE` /
+ * `CREATE PROC` / odd whitespace too, leaving everything after the keyword
+ * (the schema-qualified name, params, body) untouched.
+ */
+function asCreateOrAlter(definition: string): string {
+  return definition
+    .trim()
+    .replace(/^CREATE\s+(?:OR\s+ALTER\s+)?PROC(?:EDURE)?\b/i, 'CREATE OR ALTER PROCEDURE');
+}
+
 // -----------------------------------------------------------------------------
 // 2. Migration — packages/db/src/migrations/NNN_<table>.sql (+ .down.sql)
 // -----------------------------------------------------------------------------
@@ -189,10 +203,10 @@ export function emitMigration(model: FeatureModel): string {
   out.push('GO');
   out.push('');
 
-  // CRUD procs, verbatim from the catalog (already CREATE OR ALTER).
+  // CRUD procs from the catalog, normalized to CREATE OR ALTER (idempotent).
   for (const proc of Object.values(model.procs)) {
     if (!proc) continue;
-    out.push(proc.definition.trim());
+    out.push(asCreateOrAlter(proc.definition));
     out.push('GO');
     out.push('');
   }
@@ -238,7 +252,7 @@ export function emitProcSnapshots(model: FeatureModel): { fileName: string; cont
     if (!proc) continue;
     const content = [
       `-- Snapshot of ${proc.name}. ${GENERATED_BY}`,
-      proc.definition.trim(),
+      asCreateOrAlter(proc.definition),
       'GO',
       '',
     ].join('\n');
